@@ -1,9 +1,12 @@
 # ===== 匯入需要的工具 =====
-import os                          # Python 內建：用來讀取「環境變數」(等下解釋)
+import os
+from urllib import response                          # Python 內建：用來讀取「環境變數」(等下解釋)
 from openai import OpenAI          # OpenAI 官方 SDK，但我們會讓它指向本地 Ollama
 from dotenv import load_dotenv     # 負責把 .env 檔裡的設定載入成環境變數
 from opencc import OpenCC
-
+import json                        # Python 內建：用來處理 JSON 格式的字串和物件
+from pydantic import BaseModel, field_validator
+from typing import List
 
 # ===== 載入設定 =====
 # 這行會去專案目錄找 .env 檔，把裡面的設定讀進「環境變數」
@@ -90,18 +93,102 @@ class ChatSession:
         self.messages.append({"role": "assistant", "content": reply})
 
         return reply
+    
+def analyze(situation: str, model: str = DEFAULT_MODEL) -> str:
+    """給一個製造分析情境，要求模型回傳結構化 JSON 字串。
+    這一版先只負責『要到 JSON』，驗證留到下一個任務。
+    """
+    system = (
+        "你是資深製造業品質分析師。"
+        "你必須只輸出一個 JSON 物件，不要有任何其他文字、不要 markdown 標記。"
+        "JSON 必須包含這四個鍵："
+        "可能原因(字串陣列)、"
+        "嚴重程度(只能是 高/中/低 三者其一的字串)、"
+        "建議行動(字串陣列)、"
+        "需要補充的資訊(字串陣列)。"
+        "全部使用繁體中文。"
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": situation},
+        ],
+        # 這個參數要求模型輸出合法 JSON 格式(Ollama / OpenAI 都支援)
+        response_format={"type": "json_object"},
+    )
+
+    return response.choices[0].message.content
+
+class AnalysisResult(BaseModel):
+    """定義『一份合格的分析結果』必須長什麼樣。
+    模型輸出只要不符合這裡的規則，建立這個物件時就會自動報錯。
+    """
+    可能原因: List[str]
+    嚴重程度: str
+    建議行動: List[str]
+    需要補充的資訊: List[str]
+
+    @field_validator("嚴重程度")
+    @classmethod
+    def 嚴重程度只能三選一(cls, v):
+        if v not in ("高", "中", "低"):
+            raise ValueError(f"嚴重程度必須是 高/中/低，但收到：{v}")
+        return v
+
+    @field_validator("可能原因", "建議行動")
+    @classmethod
+    def 不可以是空陣列(cls, v):
+        if len(v) == 0:
+            raise ValueError("這個欄位不能是空陣列")
+        return v
+    
+def analyze_validated(situation: str, max_retries: int = 3, model: str = DEFAULT_MODEL) -> AnalysisResult:
+    """要求模型輸出分析 JSON，並用 Pydantic 嚴格驗證。
+    驗證失敗就重試，最多 max_retries 次；全部失敗則明確拋錯。
+    """
+    system = (
+        "你是資深製造業品質分析師。只輸出一個 JSON 物件，無其他文字、無 markdown。"
+        "鍵：可能原因(字串陣列)、嚴重程度(只能 高/中/低)、"
+        "建議行動(字串陣列)、需要補充的資訊(字串陣列)。全部繁體中文。"
+    )
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        raw = ""
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": situation},
+                ],
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content
+
+            data = json.loads(raw)                 # 第一關：格式驗證(確定性)
+            result = AnalysisResult(**data)        # 第二關：內容驗證(Pydantic)
+            print(f"[第 {attempt} 次嘗試成功]")
+            return result                          # 兩關都過才回傳
+
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            print(f"[第 {attempt} 次失敗] {type(e).__name__}: {e}")
+            print(f"   模型原始輸出：{raw[:200]}")
+            continue                               # 失敗就再試一次
+
+    # 全部重試用完還是失敗 → 不吞錯，明確讓呼叫者知道
+    raise RuntimeError(f"連續 {max_retries} 次都無法取得合格結果，最後錯誤：{last_error}")
 
 # ===== 只有「直接執行這個檔案」時，下面才會跑 =====
 # 如果這個檔案是被別的程式 import(引用)，下面就不會自動執行
 # 這是 Python 的慣例寫法，讓檔案既能單獨測試、又能被當模組重複使用
 # (這正好對應 JD 說的「封裝成可重複使用的功能」)
 if __name__ == "__main__":
-    expert_system = (
-        "你是一位資深製造業品質分析師。"
-        "請務必使用繁體中文回答，回答簡潔、條列、聚焦可行動建議。"
+    result = analyze_validated(
+        "Q3 SMT 產線不良率從 2% 升到 5%，缺陷多為錫橋(solder bridge)。"
     )
-    chat = ChatSession(system=expert_system)
-
-    print("第1輪：", chat.send("Q3 某產線不良率從 2% 升到 5%，最該先查什麼？"))
-    print("\n第2輪：", chat.send("那如果查下來是某一台機台造成的，下一步呢？"))
-    print("\n第3輪：", chat.send("我剛剛問你的第一個問題是什麼？"))
+    print("嚴重程度：", result.嚴重程度)
+    print("可能原因：", result.可能原因)
+    print("建議行動：", result.建議行動)
