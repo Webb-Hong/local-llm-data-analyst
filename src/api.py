@@ -2,8 +2,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from analyzer import get_line_defect_rates, build_situation
-from llm_client import analyze_validated, AnalysisResult
+from src.analyzer import get_line_defect_rates, build_situation
+from src.llm_client import analyze_validated, AnalysisResult
 
 app = FastAPI(title="製造分析 API", version="0.2.0")
 

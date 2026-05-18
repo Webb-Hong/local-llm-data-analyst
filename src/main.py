@@ -1,8 +1,8 @@
 """主流程：把『SQL 數據事實』接給『LLM 解讀+Pydantic 驗證』。
 這支檔案展示整條鏈：資料 → 計算 → 解讀 → 驗證。
 """
-from analyzer import build_situation, get_line_defect_rates
-from llm_client import analyze_validated
+from src.analyzer import build_situation, get_line_defect_rates
+from src.llm_client import analyze_validated
 
 
 def diagnose_line(line_id: str):
