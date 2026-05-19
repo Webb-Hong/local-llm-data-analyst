@@ -5,6 +5,7 @@
 """
 import sqlite3
 from pathlib import Path
+from src.retriever import retrieve   # 檔案上方 import 區加這行
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = str(PROJECT_ROOT / "factory.db")
@@ -66,13 +67,30 @@ def build_situation(line_id: str, db_path: str = DB_PATH) -> str:
     trend_text = "、".join(
         f'{r["month"]} 為 {r["defect_rate_pct"]}%' for r in trend
     )
+    
+    # ===== RAG:用「這條線的狀況」當查詢,檢索相關製造知識 =====
+    query = f"{line_id} 不良率上升 趨勢異常 排查"
+    kb_hits = retrieve(query, top_k=2)
+    if kb_hits:
+        kb_text = "\n\n".join(
+            f"【{s['title']}】\n{s['content'].strip()}" for s in kb_hits
+        )
+    else:
+        kb_text = "(無相關知識庫資料)"
 
     situation = (
-        f"產線 {line_id} 的品質數據如下（數字均為系統精確統計，非估計）：\n"
+        f"以下是公司內部製造知識庫的相關資料：\n"
+        f"========\n{kb_text}\n========\n\n"
+        f"產線 {line_id} 的品質數據（數字均為系統精確統計）：\n"
         f"- 整體不良率：{this_line['defect_rate_pct']}%\n"
-        f"- 逐月不良率趨勢：{trend_text}\n"
-        f"請根據以上『已確定的數據』進行分析，"
-        f"不要自行假設或更動任何數字。"
+        f"- 逐月不良率趨勢：{trend_text}\n\n"
+        f"分析要求：\n"
+        f"1. 先指出數據中的『關鍵變化點』(哪個月、從多少變到多少)。\n"
+        f"2. 『可能原因』必須結合上述知識庫的『標準排查順序』，"
+        f"針對這個變化點推理，不要只是複述知識庫的通用條列。\n"
+        f"3. 『建議行動』要對應知識庫提到的具體排查項目"
+        f"(如錫膏印刷參數、鋼板、回流溫度曲線等)，要具體可執行。\n"
+        f"4. 不得更動任何數字。"
     )
     return situation
 
