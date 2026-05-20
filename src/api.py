@@ -20,9 +20,13 @@ class DiagnosisRequest(BaseModel):
     line_id: str   # 使用者必須提供要分析哪條產線
 
 
+# @app.get("/")
+# def read_root():
+#     return {"message": "製造分析 API 運行中", "status": "ok"}
+
 @app.get("/")
 def read_root():
-    return {"message": "製造分析 API 運行中", "status": "ok"}
+    return {"message": "製造分析 API 運行中 v2", "status": "ok"}
 
 
 @app.get("/health")

@@ -1,0 +1,7 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.git/
+factory.db
+面試檔.docx

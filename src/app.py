@@ -3,10 +3,11 @@
 """
 import streamlit as st
 import requests
+import os
 
 # 你的 API 位址。注意:這也是「設定」,理想上該用環境變數
 # (呼應階段 0 學的設定分離),這裡先寫死,階段 5 容器化時會改成可配置
-API_BASE = "http://localhost:8000"
+API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 st.title("製造產線品質分析助手")
 st.write("選擇一條產線，系統會用 SQL 計算數據事實，再由 AI 解讀並給出建議。")

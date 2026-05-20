@@ -1,0 +1,11 @@
+FROM python:3.13-slim
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+
+EXPOSE 8501
+# Streamlit 也要綁 0.0.0.0(同一個概念:接受容器外的瀏覽器連進來)
+CMD ["streamlit", "run", "src/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
