@@ -181,6 +181,90 @@ def analyze_validated(situation: str, max_retries: int = 3, model: str = DEFAULT
     # 全部重試用完還是失敗 → 不吞錯，明確讓呼叫者知道
     raise RuntimeError(f"連續 {max_retries} 次都無法取得合格結果，最後錯誤：{last_error}")
 
+# ===== 探勘式分析的 Pydantic 模型 =====
+class DataInsight(BaseModel):
+    """探勘式分析的結構化輸出。
+    刻意設計得『開放但有結構』——不限定領域,但保證有觀察、建議、警告三類。
+    """
+    資料概要: str               # 一句話概括這份資料是什麼、長怎樣
+    主要觀察: List[str]         # 從統計/樣本看到的具體現象(必須有事實依據)
+    分析建議: List[str]         # 建議接下來可以做的分析方向
+    資料品質警告: List[str]     # 缺失值、可疑值、異常等(可為空)
+
+    @field_validator("資料概要")
+    @classmethod
+    def 概要不可空(cls, v):
+        if not v or not v.strip():
+            raise ValueError("資料概要不可為空")
+        return v
+
+    @field_validator("主要觀察", "分析建議")
+    @classmethod
+    def 不可是空陣列(cls, v):
+        if len(v) == 0:
+            raise ValueError("這個欄位不能是空陣列")
+        return v
+
+
+def analyze_dataset(situation: str, kb_context: str = "", max_retries: int = 3,
+                    model: str = DEFAULT_MODEL) -> DataInsight:
+    """對一份(由 build_data_situation 組好的)資料情境做開放式分析。
+    可選 RAG kb_context:由呼叫方決定要不要塞、塞什麼(讓 RAG 在外層判斷,本函式不管)。
+    沿用既有的『重試 + Pydantic 驗證 + fail-fast』結構。
+    """
+    system = (
+        "你是資深資料分析師。使用者上傳了一份資料,請只輸出一個 JSON 物件、"
+        "無其他文字、無 markdown。鍵:"
+        "資料概要(字串,一句話)、"
+        "主要觀察(字串陣列,每點要有資料依據,不要泛泛而談)、"
+        "分析建議(字串陣列,建議具體可執行)、"
+        "資料品質警告(字串陣列,沒有就回空陣列)。全部繁體中文。"
+    )
+
+    # 把 RAG 知識(若有)和資料情境一起組成 user prompt
+    user_content = situation
+    if kb_context:
+        user_content = (
+            f"以下是相關的領域知識,供你分析時參考:\n"
+            f"========\n{kb_context}\n========\n\n"
+            f"以下是要分析的資料:\n{situation}"
+        )
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        raw = ""
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content
+
+            data = json.loads(raw)
+            result = DataInsight(**data)
+
+            # 沿用 opencc 強制轉繁,保持輸出語言一致性
+            result.資料概要 = to_traditional(result.資料概要)
+            result.主要觀察 = [to_traditional(x) for x in result.主要觀察]
+            result.分析建議 = [to_traditional(x) for x in result.分析建議]
+            result.資料品質警告 = [to_traditional(x) for x in result.資料品質警告]
+
+            print(f"[第 {attempt} 次嘗試成功]")
+            return result
+
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            print(f"[第 {attempt} 次失敗] {type(e).__name__}: {e}")
+            continue
+
+    raise RuntimeError(
+        f"連續 {max_retries} 次都無法取得合格結果,最後錯誤:{last_error}"
+    )
+
 # ===== 只有「直接執行這個檔案」時，下面才會跑 =====
 # 如果這個檔案是被別的程式 import(引用)，下面就不會自動執行
 # 這是 Python 的慣例寫法，讓檔案既能單獨測試、又能被當模組重複使用
