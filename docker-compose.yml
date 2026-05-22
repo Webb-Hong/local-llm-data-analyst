@@ -23,5 +23,6 @@ services:
       # 關鍵:容器內,API_BASE 不是 localhost,是「api 這個服務名」
       # Compose 會自動建立內部網路,讓服務之間用「服務名」互相找到
       - API_BASE=http://api:8000
+      - STREAMLIT_LOGGER_LEVEL=debug     # 加這行
     depends_on:
       - api
