@@ -37,11 +37,35 @@ def explore_dataframe(df: pd.DataFrame, max_rows_shown: int = 5) -> dict:
     # 4. 前幾列:讓 LLM「看一眼」真實資料長相
     sample_rows = df.head(max_rows_shown).to_dict(orient="records")
 
+    # 5. 類別欄偵測 + 分組統計:對唯一值少的欄(可能是類別)做 group by
+    #    這讓 LLM 看得到「按類別分組後的數值統計」,而非只有整體平均
+    #    例如使用者問「哪條 line_id 最差」時,有了分組統計才答得出
+    group_summaries = {}
+    # 啟發式:唯一值 ≤ 10 且型別為文字/類別,當作類別欄
+    CATEGORICAL_THRESHOLD = 10
+    # 數值欄不當類別欄(避免把 0/1/2 編碼誤判)
+    numeric_col_names = set(numeric_cols)
+    cat_cols = [
+        c["name"] for c in columns_info
+        if c["n_unique"] <= CATEGORICAL_THRESHOLD
+        and c["name"] not in numeric_col_names
+    ]
+    if cat_cols and len(numeric_cols) > 0:
+        for cat_col in cat_cols:
+            try:
+                # 對每個類別,算所有數值欄的平均
+                grouped = df.groupby(cat_col)[list(numeric_cols)].mean().round(2)
+                group_summaries[cat_col] = grouped.to_dict(orient="index")
+            except Exception:
+                # 某些奇怪資料 group by 可能失敗,跳過該欄
+                continue
+
     return {
         "shape": {"rows": n_rows, "cols": n_cols},
         "columns": columns_info,
         "numeric_summary": numeric_summary,
         "sample_rows": sample_rows,
+        "group_summaries": group_summaries,    # 新增
     }
 
 
@@ -68,7 +92,16 @@ def build_data_situation(profile: dict) -> str:
                 f"最小 {stats.get('min')}、最大 {stats.get('max')}、"
                 f"標準差 {stats.get('std')}"
             )
-
+    # 分組統計(若有偵測到類別欄)——這讓 LLM 看到「按類別分組的細節」
+    if profile.get("group_summaries"):
+        lines.append("")
+        lines.append("按類別欄分組的數值統計(平均值):")
+        for cat_col, groups in profile["group_summaries"].items():
+            lines.append(f"\n依 {cat_col} 分組:")
+            for category, stats in groups.items():
+                stats_str = "、".join(f"{k}={v}" for k, v in stats.items())
+                lines.append(f"  - {category}:{stats_str}")
+                
     lines.append("")
     lines.append("資料前幾列範例：")
     for i, row in enumerate(profile["sample_rows"], 1):
