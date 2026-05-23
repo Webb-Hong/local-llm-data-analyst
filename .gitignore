@@ -1,5 +1,36 @@
+# Python
 .venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# 環境變數與機密
 .env
+*.env.local
+
+# 資料庫(產生物,容器自我初始化)
 factory.db
-面試檔.docx
+*.sqlite
+*.sqlite3
+
+# 本機開發工具
 test_chat.py
+run_streamlit.ps1
+
+# 私人筆記(不該進版控)
+面試檔.docx
+*.docx
+*.doc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
