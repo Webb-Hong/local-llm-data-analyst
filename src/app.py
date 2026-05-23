@@ -1,18 +1,21 @@
 """Streamlit Demo 介面:支援產線分析(既有) + 上傳資料分析(新增)。"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import os
 import streamlit as st
 import requests
+
+from src.data_explorer import explore_dataframe, build_data_situation
 
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 st.set_page_config(page_title="製造分析助手", layout="wide")
 st.title("製造產線品質分析助手")
 
-st.write("NEW VERSION v2 - tabs version")
-
 # ===== 用分頁切換兩種模式 =====
-tab1, tab2 = st.tabs(["📊 既有產線分析", "📁 上傳資料分析"])
-
+tab1, tab2, tab3 = st.tabs(["📊 既有產線分析", "📁 上傳資料分析", "💬 對話追問"])
 
 # ========== Tab 1: 既有產線分析(你原本的程式碼搬進來) ==========
 with tab1:
@@ -102,6 +105,11 @@ with tab2:
                     )
                     if r.status_code == 200:
                         st.session_state["upload_result"] = r.json()
+                        # 順手算完整 situation 存起來(本機 venv 可以直接 import src)
+                        uploaded.seek(0)
+                        preview_df_again = pd.read_csv(uploaded)
+                        profile = explore_dataframe(preview_df_again)
+                        st.session_state["upload_situation"] = build_data_situation(profile)
                     elif r.status_code == 400:
                         st.error(f"檔案問題:{r.json().get('detail')}")
                     elif r.status_code == 413:
@@ -133,3 +141,73 @@ with tab2:
             st.markdown("**⚠️ 資料品質警告:**")
             for x in res["資料品質警告"]:
                 st.warning(x)
+                
+# ========== Tab 3: 對話追問(對上傳的資料做多輪追問) ==========
+with tab3:
+    st.write("針對上傳的資料,以對話方式做進一步追問。")
+
+    # 檢查:有沒有先在 Tab 2 上傳分析過?
+    if "upload_result" not in st.session_state or "upload_situation" not in st.session_state:
+        st.info("👈 請先到「上傳資料分析」分頁上傳 CSV 並執行分析,再來這裡追問。")
+    else:
+        # ===== 初始化對話歷史(只在第一次進入時做) =====
+        if "chat_messages" not in st.session_state:
+            st.session_state["chat_messages"] = []
+
+        # ===== 顯示過往對話 =====
+        for msg in st.session_state["chat_messages"]:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+
+        # ===== 對話輸入框 =====
+        user_input = st.chat_input("輸入你的問題,例如:LINE_B 為什麼不良率最高?")
+
+        if user_input:
+            # 把使用者新訊息加進歷史
+            st.session_state["chat_messages"].append(
+                {"role": "user", "content": user_input}
+            )
+
+            # 立刻顯示使用者剛剛打的訊息(不用等 API 回應)
+            with st.chat_message("user"):
+                st.write(user_input)
+
+            # 呼叫 /chat API
+            with st.chat_message("assistant"):
+                with st.spinner("分析中..."):
+                    try:
+                        # 第一輪需要送 data_profile_text,後續送 None
+                        is_first_round = len(st.session_state["chat_messages"]) == 1
+                        payload = {
+                            "messages": st.session_state["chat_messages"],
+                            "data_profile_text": (
+                                st.session_state["upload_situation"]
+                                if is_first_round else None
+                            ),
+                            "auto_compress": True,
+                        }
+                        r = requests.post(
+                            f"{API_BASE}/chat",
+                            json=payload,
+                            timeout=120,
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            # 把 API 回的「更新後完整歷史」覆蓋本地 session
+                            st.session_state["chat_messages"] = data["updated_messages"]
+                            # 顯示這輪 assistant 的最新回答
+                            st.write(data["updated_messages"][-1]["content"])
+                            if data["was_compressed"]:
+                                st.caption("ℹ️ 對話歷史已壓縮以節省 context")
+                        elif r.status_code == 503:
+                            st.warning(f"服務暫時無法完成:{r.json().get('detail')}")
+                        else:
+                            st.error(f"分析失敗(HTTP {r.status_code}):{r.json().get('detail')}")
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"請求錯誤:{e}")
+
+        # ===== 清除對話按鈕 =====
+        if st.session_state["chat_messages"]:
+            if st.button("🗑️ 清除對話歷史", key="btn_clear_chat"):
+                st.session_state["chat_messages"] = []
+                st.rerun()
