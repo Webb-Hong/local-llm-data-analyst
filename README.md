@@ -393,6 +393,57 @@ if c["dtype"] in ("object", "category", "bool")   # 列舉白名單
 > **教訓**:給 LLM context ≠ 引出洞察,中間還隔一道「**要求它做什麼具體推理**」的 prompt 設計。這是 LLM 工程的核心難題之一,不是接上 LLM 就會分析。
 
 
+## 測試
+
+本專案以 pytest 建立完整測試套件,**57 個測試全綠、跑完不到 3 秒**,聚焦在「確定性邏輯」的驗證。
+
+### 跑測試
+
+```bash
+# 跑所有測試
+pytest -v
+
+# 跑測試 + 覆蓋率報告
+pytest --cov=src --cov-report=term-missing --cov-report=html
+```
+
+### 測試套件
+
+| 檔案 | 測試數 | 覆蓋內容 |
+|---|---|---|
+| `test_vector_retriever.py` | 10 | 餘弦相似度數學(含 parametrize) |
+| `test_analyzer.py` | 9 | SQL 邏輯(不良率、月趨勢、排序) |
+| `test_data_explorer.py` | 22 | pandas 探勘 + 類別欄分組統計 |
+| `test_retriever.py` | 7 | 關鍵字 RAG 檢索 |
+| `test_build_situation.py` | 7 | Prompt 字串組裝契約 |
+| `test_smoke.py` | 2 | 環境驗證 |
+| **共計** | **57** | |
+
+### 測試策略
+
+刻意聚焦在「**確定性邏輯**」——SQL 計算、pandas 探勘、向量數學——這些有正確答案、可重複驗證。LLM 互動層暫時用 Pydantic 嚴格驗證守邊界,沒寫單元測試;規劃下一步用 mock 補上(見 Future Work)。
+
+**為什麼這樣切**:LLM 輸出有機率性,直接 assert 會脆;用 mock 隔離 LLM、測「**重試邏輯 / Pydantic 驗證 / 失敗處理**」的程式碼,測試才穩定。這是 LLM 應用測試的標準做法。
+
+### 覆蓋率
+
+| 模組 | 覆蓋率 | 說明 |
+|---|---|---|
+| `analyzer.py` | **85%** | SQL 邏輯全覆蓋,僅 RAG 整合分支未測 |
+| `retriever.py` | **83%** | 關鍵字檢索邏輯完整 |
+| `data_explorer.py` | 55% | **核心函式 ~100%**,低值來自 `__main__` demo 區塊 |
+| `vector_retriever.py` | 33% | **`cosine_similarity` 100%**,其餘依賴 Ollama(待 mock) |
+| `api.py` / `app.py` / `llm_client.py` | 0% | 待 FastAPI TestClient + mock LLM 補測 |
+
+整體 **25%**——但這數字本身意義有限,**重要的是「測什麼 / 沒測什麼 / 為什麼」**。本專案刻意先測「**輸入輸出可預測**」的核心邏輯,LLM 互動層、HTTP 端點、UI 層留給後續用 mock + TestClient 補。**追求 100% 覆蓋是反模式,『核心邏輯被守住』才是真目標**。
+
+### 測試帶來的設計洞察
+
+寫測試過程意外發現一個 retriever 設計限制:**逐字元計分讓含單一常見中文字的查詢會誤命中**(例如 query 含「不」字,會在「不良率」「不該」等到處命中)。
+
+這個限制本身就是專案改做向量檢索版的工程理由——**測試把隱性設計缺陷顯性化**,成為文件的一部分。對應的測試 `test_retrieve_relevant_query_scores_higher_than_irrelevant` 也從「**驗證絕對結果**」改成「**驗證相對性質**」(相關 query 命中數 > 無關 query 命中數),這是 **property-based testing** 的進階模式。
+
+
 ## 已知限制
 
 誠實列出目前的能力邊界——清楚自己沒做到的,比假裝完美更接近真實的工程現場。
