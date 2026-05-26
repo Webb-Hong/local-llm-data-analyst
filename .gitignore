@@ -34,3 +34,7 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+.pytest_cache/
+htmlcov/
+.coverage
