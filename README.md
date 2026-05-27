@@ -395,7 +395,7 @@ if c["dtype"] in ("object", "category", "bool")   # 列舉白名單
 
 ## 測試
 
-本專案以 pytest 建立完整測試套件,**57 個測試全綠、跑完不到 3 秒**,聚焦在「確定性邏輯」的驗證。
+本專案以 pytest 建立完整測試套件,**87 個測試全綠、跑完不到 6 秒**,涵蓋 SQL 邏輯、pandas 探勘、向量數學、RAG 檢索、LLM 重試邏輯,以及 FastAPI 端點整合測試。
 
 ### 跑測試
 
@@ -403,7 +403,7 @@ if c["dtype"] in ("object", "category", "bool")   # 列舉白名單
 # 跑所有測試
 pytest -v
 
-# 跑測試 + 覆蓋率報告
+# 跑測試 + 覆蓋率報告(終端機 + HTML 視覺化)
 pytest --cov=src --cov-report=term-missing --cov-report=html
 ```
 
@@ -416,32 +416,51 @@ pytest --cov=src --cov-report=term-missing --cov-report=html
 | `test_data_explorer.py` | 22 | pandas 探勘 + 類別欄分組統計 |
 | `test_retriever.py` | 7 | 關鍵字 RAG 檢索 |
 | `test_build_situation.py` | 7 | Prompt 字串組裝契約 |
+| `test_llm_client.py` | 11 | **LLM 互動邏輯(mock)** — 重試、Pydantic 驗證、fail-fast |
+| `test_api.py` | 19 | **FastAPI 整合測試** — 全部端點 × 成功/錯誤路徑 |
 | `test_smoke.py` | 2 | 環境驗證 |
-| **共計** | **57** | |
+| **共計** | **87** | |
 
 ### 測試策略
 
-刻意聚焦在「**確定性邏輯**」——SQL 計算、pandas 探勘、向量數學——這些有正確答案、可重複驗證。LLM 互動層暫時用 Pydantic 嚴格驗證守邊界,沒寫單元測試;規劃下一步用 mock 補上(見 Future Work)。
+整套測試分三層:
 
-**為什麼這樣切**:LLM 輸出有機率性,直接 assert 會脆;用 mock 隔離 LLM、測「**重試邏輯 / Pydantic 驗證 / 失敗處理**」的程式碼,測試才穩定。這是 LLM 應用測試的標準做法。
+1. **純函式測試**(SQL、pandas、向量數學)— 輸入輸出可預測,直接 assert 結果
+2. **Mock 測試**(LLM 互動)— 用 `pytest-mock` 取代 `client.chat.completions.create`,精準控制「LLM 假裝回了什麼」,測**重試邏輯、Pydantic 驗證、fail-fast** 不依賴真實 LLM
+3. **整合測試**(API 端點)— 用 FastAPI 的 `TestClient` 在記憶體跑 app,驗證請求 → 內部處理 → 回應的完整鏈,LLM 用 mock 隔離
+
+**為什麼這樣切**:LLM 輸出有機率性,直接 assert 會脆;**mock LLM 才能測「我的程式怎麼處理 LLM 的各種失敗」這件事本身**。整套測試完全離線、不依賴 Ollama 開著、不耗 token。
 
 ### 覆蓋率
 
 | 模組 | 覆蓋率 | 說明 |
 |---|---|---|
-| `analyzer.py` | **85%** | SQL 邏輯全覆蓋,僅 RAG 整合分支未測 |
+| `analyzer.py` | **85%** | SQL 邏輯全覆蓋 |
 | `retriever.py` | **83%** | 關鍵字檢索邏輯完整 |
-| `data_explorer.py` | 55% | **核心函式 ~100%**,低值來自 `__main__` demo 區塊 |
-| `vector_retriever.py` | 33% | **`cosine_similarity` 100%**,其餘依賴 Ollama(待 mock) |
-| `api.py` / `app.py` / `llm_client.py` | 0% | 待 FastAPI TestClient + mock LLM 補測 |
+| `api.py` | **77%** | 全部 5 個端點 × 成功/失敗路徑 |
+| `llm_client.py` | **60%** | `analyze_validated` 完整覆蓋(重試、Pydantic、fail-fast);`analyze_dataset` 與 `ChatSession` 部分覆蓋 |
+| `data_explorer.py` | 56% | **核心函式 ~100%**,低值來自 `__main__` demo 區塊 |
+| `vector_retriever.py` | 33% | **`cosine_similarity` 100%**,其餘依賴 Ollama embedding(待 mock) |
+| `app.py` / `main.py` / `make_data.py` | 0% | UI/CLI/一次性腳本,不在測試範圍 |
 
-整體 **25%**——但這數字本身意義有限,**重要的是「測什麼 / 沒測什麼 / 為什麼」**。本專案刻意先測「**輸入輸出可預測**」的核心邏輯,LLM 互動層、HTTP 端點、UI 層留給後續用 mock + TestClient 補。**追求 100% 覆蓋是反模式,『核心邏輯被守住』才是真目標**。
+整體 **47%**——重點不在數字本身,而是**「測什麼 / 沒測什麼 / 為什麼」**。本專案刻意先測「**輸入輸出可預測**」的核心邏輯與 API 行為契約,Streamlit UI 不在 unit test 範疇,`make_data.py` 是一次性 fixture。**核心邏輯模組(analyzer / retriever / llm_client / api)平均 76%**——這才是真正有意義的指標。
 
 ### 測試帶來的設計洞察
 
 寫測試過程意外發現一個 retriever 設計限制:**逐字元計分讓含單一常見中文字的查詢會誤命中**(例如 query 含「不」字,會在「不良率」「不該」等到處命中)。
 
 這個限制本身就是專案改做向量檢索版的工程理由——**測試把隱性設計缺陷顯性化**,成為文件的一部分。對應的測試 `test_retrieve_relevant_query_scores_higher_than_irrelevant` 也從「**驗證絕對結果**」改成「**驗證相對性質**」(相關 query 命中數 > 無關 query 命中數),這是 **property-based testing** 的進階模式。
+
+### 為什麼這個測試套件「夠用」
+
+* **重試邏輯有測**(LLM 失敗時的行為)
+* **Pydantic 嚴格驗證有測**(業務規則、邊界值)
+* **API 錯誤處理有測**(404、422、503 各自的觸發條件)
+* **整合鏈有測**(API → analyze → LLM → 回應)
+* **核心數學有測**(餘弦相似度的數學性質)
+* **設計限制顯性化**(retriever 中文計分問題寫進註解)
+
+剩下沒測的是「**會打 Ollama 的函式**」(`embed`、`analyze_dataset` 的真實呼叫)以及 Streamlit UI——這兩類在生產系統會用其他方式驗證(LLM observability 工具、E2E 測試),不在 unit test 範疇。
 
 
 ## 已知限制
